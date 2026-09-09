@@ -553,7 +553,8 @@ val signRotatedNightlyApk by tasks.registering {
 }
 
 tasks.matching { it.name == "assembleRelease" }.configureEach {
-    finalizedBy(signRotatedReleaseApk)
+    // Disabled for custom build: rotation signing requires author lineage file.
+    // finalizedBy(signRotatedReleaseApk)
 }
 
 tasks.matching { it.name == "assembleNightly" }.configureEach {

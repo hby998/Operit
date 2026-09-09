@@ -1,0 +1,113 @@
+name: Build Game Setup APK (My Signature)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'app/src/main/java/com/ai/assistance/operit/ui/features/game/**'
+      - '.github/workflows/build-game-setup.yml'
+
+concurrency:
+  group: game-setup-build
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: '21'
+  NODE_VERSION: '22'
+  ANDROID_NDK_VERSION: '25.1.8937393'
+  ANDROID_CMAKE_VERSION: '3.22.1'
+  ANDROID_API_LEVEL: '26'
+  RUST_VERSION: '1.88.0'
+  MANUAL_DEPS_DIR: manual-deps
+
+jobs:
+  build:
+    name: Build signed APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Initialize terminal submodule
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync -- terminal
+          git submodule update --init --recursive --depth 1 terminal
+          git submodule status -- terminal
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK, NDK and CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-34" \
+            "platforms;android-36" \
+            "build-tools;34.0.0" \
+            "build-tools;35.0.0" \
+            "ndk;$ANDROID_NDK_VERSION" \
+            "cmake;$ANDROID_CMAKE_VERSION"
+
+      - name: Decode signing keystore
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.OPERIT_KEYSTORE_B64 }}" | base64 -d > "$GITHUB_WORKSPACE/my_operit.keystore"
+          cat >> "$GITHUB_WORKSPACE/local.properties" <<EOF
+          RELEASE_STORE_FILE=$GITHUB_WORKSPACE/my_operit.keystore
+          RELEASE_STORE_PASSWORD=${{ secrets.OPERIT_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS=${{ secrets.OPERIT_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD=${{ secrets.OPERIT_KEY_PASSWORD }}
+          EOF
+          echo "keystore decoded and local.properties written"
+
+      - name: Build release APK (signed with my key)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew :app:assembleRelease --stacktrace --no-daemon
+
+      - name: Verify APK signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=$(find app/build/outputs/apk -name '*.apk' | head -1)
+          echo "APK: $APK"
+          apksigner verify --print-certs "$APK" || true
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: operit-game-setup-signed
+          path: app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
